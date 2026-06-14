@@ -1,0 +1,17 @@
+# 環境設定
+.venv/
+.venv-1/
+*.cfg
+*.tag
+
+# 不要なファイル
+test.py
+books.xlsx
+sales.csv
+
+# 非公開フォルダ
+ドル道/
+
+# Windowsの一時ファイル
+Thumbs.db
+desktop.ini
