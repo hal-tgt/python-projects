@@ -1,0 +1,53 @@
+import discord
+import requests
+import os
+
+# 設定（環境変数から読み込む）
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+# Botの設定
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+# 起動時に表示
+@client.event
+async def on_ready():
+    print(f"{client.user} としてログインしました！")
+
+# メッセージを受け取ったとき
+@client.event
+async def on_message(message):
+    # Bot自身のメッセージは無視
+    if message.author == client.user:
+        return
+
+    # 「天気」と送ったら天気を返す
+    if message.content == "天気":
+        # 東京の天気を取得
+        url = "https://api.open-meteo.com/v1/forecast?latitude=35.6895&longitude=139.6917&current=temperature_2m,weathercode,relativehumidity_2m"
+        response = requests.get(url)
+        data = response.json()
+
+        current = data["current"]
+        temperature = current["temperature_2m"]
+        humidity = current["relativehumidity_2m"]
+        weathercode = current["weathercode"]
+
+        weather_dict = {
+            0: "快晴", 1: "晴れ", 2: "曇りがち",
+            3: "曇り", 45: "霧", 51: "小雨",
+            61: "雨", 80: "にわか雨",
+        }
+        weather = weather_dict.get(weathercode, "不明")
+
+        await message.channel.send(
+            f"🌤 東京の天気\n"
+            f"天気: {weather}\n"
+            f"気温: {temperature}℃\n"
+            f"湿度: {humidity}%"
+        )
+
+# Bot起動
+client.run(DISCORD_TOKEN)

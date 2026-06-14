@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌿 ツリーマップ</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f1117;
+    --surface: #161a27;
+    --border: #2a2f45;
+    --text: #d4d8f0;
+    --muted: #555;
+    --accent: #4f9cf9;
+  }
+  body {
+    width: 100vw; height: 100vh;
+    background: var(--bg);
+    display: flex; flex-direction: column; overflow: hidden;
+    font-family: 'Noto Sans JP', sans-serif;
+    color: var(--text);
+  }
+
+  /* Header */
+  #header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex; align-items: center; gap: 12px;
+    flex-shrink: 0; z-index: 10;
+  }
+  #logo { color: var(--accent); font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+  #save-badge { font-size: 12px; font-weight: 600; transition: color 0.3s; }
+  .spacer { flex: 1; }
+  #shortcut-hint { color: #444; font-size: 11px; }
+  .btn {
+    border: none; border-radius: 8px;
+    padding: 7px 14px; cursor: pointer;
+    font-size: 13px; font-weight: 600;
+    font-family: 'Noto Sans JP', sans-serif;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-danger { background: transparent; color: #ef4444; border: 1px solid #ef444466; font-weight: 400; }
+
+  /* Canvas */
+  #canvas-wrap {
+    flex: 1; overflow: hidden; position: relative;
+    cursor: grab;
+  }
+  #canvas-wrap.dragging { cursor: grabbing; }
+  #svg-canvas { display: block; transform-origin: 0 0; }
+
+  /* Footer */
+  #footer {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 6px 20px;
+    display: flex; gap: 20px; align-items: center;
+    flex-shrink: 0; font-size: 12px; color: var(--muted);
+  }
+  #footer b { color: #aaa; }
+  #footer #selected-label { color: var(--accent); }
+
+  /* Node inline input (foreignObject) */
+  .node-input {
+    background: transparent; border: none; outline: none;
+    color: #fff; font-family: 'Noto Sans JP', sans-serif;
+    font-size: 13px; width: 90%; text-align: center;
+  }
+  .node-div {
+    width: 160px; height: 48px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 10px; cursor: pointer;
+    transition: box-shadow 0.15s, background 0.15s;
+    border: 2px solid var(--node-color, #4f9cf9);
+    background: var(--node-bg, #1e2130);
+    box-shadow: var(--node-shadow, 0 2px 12px #0008);
+  }
+  .node-label {
+    font-size: 13px; padding: 0 8px;
+    word-break: break-all; line-height: 1.3;
+    text-align: center; max-width: 144px;
+    overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+
+  /* Loading */
+  #loading {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: var(--accent);
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">読み込み中…</div>
+
+<div id="header">
+  <span id="logo">🌿 ツリーマップ</span>
+  <span id="save-badge"></span>
+  <span class="spacer"></span>
+  <span id="shortcut-hint">Tab: 子追加　Enter: 兄弟追加　F2/Space: 編集　Del: 削除　ダブルクリック: 編集　ホイール: ズーム</span>
+  <button class="btn btn-primary" id="btn-add-root">+ 開始点を追加</button>
+  <button class="btn btn-danger" id="btn-reset">リセット</button>
+</div>
+
+<div id="canvas-wrap">
+  <svg id="svg-canvas" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e2130" stroke-width="0.8"/>
+      </pattern>
+    </defs>
+    <rect id="grid-bg" fill="url(#grid)"/>
+    <g id="edges-layer"></g>
+    <g id="nodes-layer"></g>
+  </svg>
+</div>
+
+<div id="footer">
+  <span>ノード数: <b id="stat-count">0</b></span>
+  <span>ズーム: <b id="stat-zoom">100%</b></span>
+  <span id="selected-label"></span>
+</div>
+
+<script>
+// ===================== Constants =====================
+const COLORS = ["#4f9cf9","#f97316","#22c55e","#a855f7","#ef4444","#14b8a6","#f59e0b","#ec4899","#64748b","#06b6d4"];
+const NODE_W = 160, NODE_H = 48, H_GAP = 80, V_GAP = 24;
+const STORAGE_KEY = "treemap-data-v2";
+
+// ===================== State =====================
+let nodeIdCounter = 1;
+let nodes = [];
+let selected = null;
+let editing = null;
+let pan = { x: 0, y: 0 };
+let zoom = 1;
+let dragging = false;
+let dragStart = null;
+let saveTimer = null;
+let positions = {};
+
+// ===================== Node helpers =====================
+function makeId() { return nodeIdCounter++; }
+function createNode(label = "選択肢", parentId = null, depth = 0) {
+  return { id: makeId(), label, parentId, children: [], depth };
+}
+function findNode(list, id) {
+  for (const n of list) {
+    if (n.id === id) return n;
+    const f = findNode(n.children, id);
+    if (f) return f;
+  }
+  return null;
+}
+function collectAll(list, acc = []) {
+  for (const n of list) { acc.push(n); collectAll(n.children, acc); }
+  return acc;
+}
+function maxId(list) {
+  return collectAll(list).reduce((m, n) => Math.max(m, n.id), 0);
+}
+function updateLabel(list, id, label) {
+  return list.map(n => n.id === id ? { ...n, label } : { ...n, children: updateLabel(n.children, id, label) });
+}
+function addChild(list, parentId, depth) {
+  return list.map(n => {
+    if (n.id === parentId) return { ...n, children: [...n.children, createNode("選択肢", parentId, depth + 1)] };
+    return { ...n, children: addChild(n.children, parentId, depth + 1) };
+  });
+}
+function deleteNode(list, id) {
+  return list.filter(n => n.id !== id).map(n => ({ ...n, children: deleteNode(n.children, id) }));
+}
+function addSibling(list, id, parentId, depth) {
+  if (parentId === null) {
+    const idx = list.findIndex(n => n.id === id);
+    const next = [...list];
+    next.splice(idx + 1, 0, createNode("選択肢", null, 0));
+    return next;
+  }
+  return list.map(n => {
+    if (n.id === parentId) {
+      const idx = n.children.findIndex(c => c.id === id);
+      const next = [...n.children];
+      next.splice(idx + 1, 0, createNode("選択肢", parentId, depth));
+      return { ...n, children: next };
+    }
+    return { ...n, children: addSibling(n.children, id, parentId, depth) };
+  });
+}
+
+// ===================== Layout =====================
+function measureHeight(node) {
+  if (!node.children.length) return NODE_H;
+  const s = node.children.reduce((a, c) => a + measureHeight(c), 0);
+  return Math.max(NODE_H, s + V_GAP * (node.children.length - 1));
+}
+function layoutTree(list) {
+  const pos = {};
+  let globalY = 40;
+  function place(node, x, startY) {
+    if (!node.children.length) {
+      pos[node.id] = { x, y: startY + NODE_H / 2 };
+      return startY + NODE_H;
+    }
+    let childY = startY;
+    const centers = [];
+    for (const ch of node.children) {
+      const cy = place(ch, x + NODE_W + H_GAP, childY);
+      centers.push(pos[ch.id].y);
+      childY = cy + V_GAP;
+    }
+    pos[node.id] = { x, y: (Math.min(...centers) + Math.max(...centers)) / 2 };
+    return childY - V_GAP;
+  }
+  for (const root of list) {
+    const endY = place(root, 40, globalY);
+    globalY = endY + V_GAP * 2;
+  }
+  return pos;
+}
+function getEdges(list, pos) {
+  const edges = [];
+  function walk(node) {
+    const p = pos[node.id];
+    if (!p) return;
+    for (const ch of node.children) {
+      const c = pos[ch.id];
+      if (c) edges.push({ x1: p.x + NODE_W, y1: p.y, x2: c.x, y2: c.y });
+      walk(ch);
+    }
+  }
+  list.forEach(walk);
+  return edges;
+}
+function color(depth) { return COLORS[depth % COLORS.length]; }
+
+// ===================== Render =====================
+const svg = document.getElementById("svg-canvas");
+const edgesLayer = document.getElementById("edges-layer");
+const nodesLayer = document.getElementById("nodes-layer");
+const gridBg = document.getElementById("grid-bg");
+
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+function htmlEl(tag, attrs = {}, style = {}) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  Object.assign(el.style, style);
+  return el;
+}
+
+function render() {
+  positions = layoutTree(nodes);
+  const all = collectAll(nodes);
+
+  // canvas size
+  const xs = Object.values(positions).map(p => p.x + NODE_W / 2 + 120);
+  const ys = Object.values(positions).map(p => p.y + NODE_H / 2 + 80);
+  const cw = Math.max(1400, ...xs);
+  const ch = Math.max(900, ...ys);
+  svg.setAttribute("width", cw);
+  svg.setAttribute("height", ch);
+  gridBg.setAttribute("width", cw);
+  gridBg.setAttribute("height", ch);
+  svg.style.transform = `translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+
+  // edges
+  edgesLayer.innerHTML = "";
+  for (const e of getEdges(nodes, positions)) {
+    const mx = (e.x1 + e.x2) / 2;
+    edgesLayer.appendChild(svgEl("path", {
+      d: `M ${e.x1} ${e.y1} C ${mx} ${e.y1} ${mx} ${e.y2} ${e.x2} ${e.y2}`,
+      fill: "none", stroke: "#2d3455", "stroke-width": 2, "stroke-linecap": "round"
+    }));
+  }
+
+  // nodes
+  nodesLayer.innerHTML = "";
+  for (const node of all) {
+    const pos = positions[node.id];
+    if (!pos) continue;
+    renderNode(node, pos);
+  }
+
+  // footer
+  document.getElementById("stat-count").textContent = all.length;
+  document.getElementById("stat-zoom").textContent = Math.round(zoom * 100) + "%";
+  const selLabel = document.getElementById("selected-label");
+  if (selected) {
+    const n = findNode(nodes, selected);
+    selLabel.textContent = n ? `選択中: ${n.label}` : "";
+  } else {
+    selLabel.textContent = "";
+  }
+}
+
+function renderNode(node, pos) {
+  const c = color(node.depth);
+  const isSel = node.id === selected;
+  const isEd = node.id === editing;
+  const g = svgEl("g");
+
+  // foreign object for the node box
+  const fo = svgEl("foreignObject", {
+    x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2,
+    width: NODE_W, height: NODE_H,
+  });
+  fo.style.overflow = "visible";
+
+  const div = document.createElement("div");
+  div.className = "node-div";
+  div.style.setProperty("--node-color", c);
+  div.style.setProperty("--node-bg", isSel ? c : "#1e2130");
+  div.style.setProperty("--node-shadow", isSel ? `0 0 18px ${c}88` : "0 2px 12px #0008");
+  div.style.borderColor = c;
+
+  if (isEd) {
+    const inp = document.createElement("input");
+    inp.className = "node-input";
+    inp.value = node.label;
+    inp.addEventListener("input", e => {
+      nodes = updateLabel(nodes, node.id, e.target.value);
+      scheduleSave();
+      render();
+      // keep focus on re-render by refocusing after
+    });
+    inp.addEventListener("blur", () => { editing = null; render(); });
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === "Escape") { editing = null; render(); }
+    });
+    div.appendChild(inp);
+    fo.appendChild(div);
+    g.appendChild(fo);
+    nodesLayer.appendChild(g);
+    // focus after DOM insertion
+    requestAnimationFrame(() => inp.focus());
+    return;
+  }
+
+  const span = document.createElement("span");
+  span.className = "node-label";
+  span.style.color = isSel ? "#fff" : "#d4d8f0";
+  span.textContent = node.label;
+  div.appendChild(span);
+  div.addEventListener("click", e => {
+    e.stopPropagation();
+    selected = node.id === selected ? null : node.id;
+    render();
+  });
+  div.addEventListener("dblclick", e => {
+    e.stopPropagation();
+    editing = node.id;
+    render();
+  });
+  fo.appendChild(div);
+  g.appendChild(fo);
+
+  if (isSel) {
+    // Add child (+)
+    const gc = makeActionCircle(pos.x + NODE_W / 2 + 22, pos.y, c, "+", 14, () => {
+      nodes = addChild(nodes, node.id, node.depth);
+      selected = null; scheduleSave(); render();
+    });
+    g.appendChild(gc);
+
+    // Add sibling (↓)
+    const gs = makeActionCircle(pos.x, pos.y + NODE_H / 2 + 18, "#4a5280", "↓", 13, () => {
+      nodes = addSibling(nodes, node.id, node.parentId, node.depth);
+      selected = null; scheduleSave(); render();
+    }, "#aac");
+    g.appendChild(gs);
+
+    // Delete (×)
+    const gd = makeActionCircle(pos.x - NODE_W / 2 - 18, pos.y, "#ef4444", "×", 12, () => {
+      nodes = deleteNode(nodes, node.id);
+      selected = null; scheduleSave(); render();
+    }, "#fff", 11);
+    g.appendChild(gd);
+
+    // Edit (✏)
+    const ge = makeActionCircle(pos.x, pos.y - NODE_H / 2 - 18, "#4a5280", "✏", 11, () => {
+      editing = node.id; render();
+    }, "#aac", 11);
+    g.appendChild(ge);
+  }
+
+  nodesLayer.appendChild(g);
+}
+
+function makeActionCircle(cx, cy, fill, txt, r, onClick, textColor = "#fff", fontSize = 13) {
+  const g = svgEl("g");
+  g.style.cursor = "pointer";
+  const circ = svgEl("circle", { cx, cy, r, fill });
+  circ.setAttribute("opacity", "0.92");
+  const label = svgEl("text", {
+    x: cx, y: cy + fontSize * 0.35,
+    "text-anchor": "middle", fill: textColor,
+    "font-size": fontSize, "font-weight": "bold",
+    "font-family": "'Noto Sans JP', sans-serif"
+  });
+  label.textContent = txt;
+  g.appendChild(circ);
+  g.appendChild(label);
+  g.addEventListener("click", e => { e.stopPropagation(); onClick(); });
+  return g;
+}
+
+// ===================== Save / Load =====================
+function setSaveStatus(status) {
+  const badge = document.getElementById("save-badge");
+  const config = {
+    saving: { color: "#f59e0b", text: "保存中…" },
+    saved:  { color: "#22c55e", text: "✓ 保存済み" },
+    error:  { color: "#ef4444", text: "保存失敗" },
+  }[status];
+  if (!config) return;
+  badge.style.color = config.color;
+  badge.textContent = config.text;
+}
+
+function scheduleSave() {
+  setSaveStatus("saving");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, pan, zoom }));
+      setSaveStatus("saved");
+    } catch (e) {
+      setSaveStatus("error");
+    }
+  }, 800);
+}
+
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (saved.nodes && saved.nodes.length) {
+        nodeIdCounter = maxId(saved.nodes) + 1;
+        nodes = saved.nodes;
+        if (saved.pan) pan = saved.pan;
+        if (saved.zoom) zoom = saved.zoom;
+        return;
+      }
+    }
+  } catch (e) {}
+  // fresh start
+  nodeIdCounter = 1;
+  const root = createNode("スタート", null, 0);
+  nodes = [root];
+}
+
+// ===================== Pan / Zoom =====================
+const wrap = document.getElementById("canvas-wrap");
+
+wrap.addEventListener("mousedown", e => {
+  if (e.target === svg || e.target === gridBg || e.target.id === "svg-canvas") {
+    dragging = true;
+    dragStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    wrap.classList.add("dragging");
+    selected = null; render();
+  }
+});
+window.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  pan = { x: e.clientX - dragStart.x, y: e.clientY - dragStart.y };
+  svg.style.transform = `translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+  document.getElementById("save-badge"); // keep live
+});
+window.addEventListener("mouseup", () => {
+  if (dragging) { dragging = false; wrap.classList.remove("dragging"); scheduleSave(); }
+});
+wrap.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoom = Math.min(2, Math.max(0.2, zoom - e.deltaY * 0.001));
+  svg.style.transform = `translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+  document.getElementById("stat-zoom").textContent = Math.round(zoom * 100) + "%";
+  scheduleSave();
+}, { passive: false });
+
+// ===================== Keyboard =====================
+window.addEventListener("keydown", e => {
+  if (editing !== null) return;
+  if (!selected) return;
+  const node = findNode(nodes, selected);
+  if (!node) return;
+  if (e.key === "Tab") {
+    e.preventDefault();
+    nodes = addChild(nodes, node.id, node.depth);
+    selected = null; scheduleSave(); render();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    nodes = addSibling(nodes, node.id, node.parentId, node.depth);
+    selected = null; scheduleSave(); render();
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    nodes = deleteNode(nodes, node.id);
+    selected = null; scheduleSave(); render();
+  } else if (e.key === "F2" || e.key === " ") {
+    e.preventDefault();
+    editing = node.id; render();
+  }
+});
+
+// ===================== Header buttons =====================
+document.getElementById("btn-add-root").addEventListener("click", () => {
+  nodes = [...nodes, createNode("新しい開始点", null, 0)];
+  scheduleSave(); render();
+});
+document.getElementById("btn-reset").addEventListener("click", () => {
+  if (!confirm("全データをリセットしますか？")) return;
+  nodeIdCounter = 1;
+  nodes = [createNode("スタート", null, 0)];
+  pan = { x: 0, y: 0 }; zoom = 1;
+  selected = null; editing = null;
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  setSaveStatus("saved"); render();
+});
+
+// ===================== Init =====================
+loadData();
+document.getElementById("loading").style.display = "none";
+setSaveStatus("saved");
+render();
+</script>
+</body>
+</html>
