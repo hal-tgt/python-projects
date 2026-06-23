@@ -92,6 +92,16 @@ def weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weathercode,relativehumidity_2m"
     response = requests.get(url)
     data = response.json()
+
+    if "current" not in data:
+        return f"""
+        <div style="text-align:center; margin-top:50px; font-family:sans-serif;">
+            <h1>天気情報の取得に失敗しました</h1>
+            <p>エラー: {data}</p>
+            <a href="/">戻る</a>
+        </div>
+        """
+    
     current = data["current"]
     temperature = current["temperature_2m"]
     humidity = current["relativehumidity_2m"]
